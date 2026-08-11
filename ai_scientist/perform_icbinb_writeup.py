@@ -685,6 +685,26 @@ def load_exp_summaries(base_folder):
                 loaded_summaries[key] = {}
         else:
             loaded_summaries[key] = {}
+
+    # Co-evaluation follow-up searches are stored separately so the original
+    # tree-search summaries remain untouched. Include them only when present.
+    coevaluation_dir = osp.join(base_folder, "coevaluation")
+    if osp.isdir(coevaluation_dir):
+        key_by_filename = {fname: key for fname, key in summary_files}
+        for round_name in sorted(os.listdir(coevaluation_dir)):
+            bundle_path = osp.join(coevaluation_dir, round_name, "summary_bundle.json")
+            if not osp.isfile(bundle_path):
+                continue
+            try:
+                with open(bundle_path, "r") as f:
+                    bundle = json.load(f)
+                for fname, summary in bundle.get("followup_summaries", {}).items():
+                    if fname in key_by_filename:
+                        loaded_summaries[
+                            f"{key_by_filename[fname]}_{round_name.upper()}"
+                        ] = summary
+            except json.JSONDecodeError:
+                print(f"Warning: {bundle_path} is not valid JSON. Skipping it.")
     return loaded_summaries
 
 
@@ -720,7 +740,7 @@ def filter_experiment_summaries(exp_summaries, step_name):
 
     filtered_summaries = {}
     for stage_name in exp_summaries.keys():
-        if stage_name in {"BASELINE_SUMMARY", "RESEARCH_SUMMARY"}:
+        if stage_name.startswith(("BASELINE_SUMMARY", "RESEARCH_SUMMARY")):
             filtered_summaries[stage_name] = {}
             for key in exp_summaries[stage_name].keys():
                 if key in {"best node"}:
@@ -730,7 +750,10 @@ def filter_experiment_summaries(exp_summaries, step_name):
                             filtered_summaries[stage_name][key][node_key] = (
                                 exp_summaries[stage_name][key][node_key]
                             )
-        elif stage_name == "ABLATION_SUMMARY" and step_name == "plot_aggregation":
+        elif (
+            stage_name.startswith("ABLATION_SUMMARY")
+            and step_name == "plot_aggregation"
+        ):
             filtered_summaries[stage_name] = {}
             for ablation_summary in exp_summaries[stage_name]:
                 filtered_summaries[stage_name][ablation_summary["ablation_name"]] = {}

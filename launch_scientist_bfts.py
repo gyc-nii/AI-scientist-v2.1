@@ -25,6 +25,12 @@ from ai_scientist.perform_icbinb_writeup import (
 )
 from ai_scientist.perform_llm_review import perform_review, load_paper
 from ai_scientist.perform_vlm_review import perform_imgs_cap_ref_review
+from ai_scientist.perform_coevaluation import (
+    create_coevaluation_branch,
+    run_coevaluation_pipeline,
+    snapshot_baseline_artifacts,
+    write_comparison_manifest,
+)
 from ai_scientist.utils.token_tracker import token_tracker
 
 
@@ -119,6 +125,26 @@ def parse_arguments():
         help="Model to use for review main text and captions",
     )
     parser.add_argument(
+        "--co-evaluation",
+        action="store_true",
+        help=(
+            "Create a matched baseline/co-evaluation pair. The co-evaluation branch "
+            "adds an experiment review loop and a PDF revision loop."
+        ),
+    )
+    parser.add_argument(
+        "--model_coeval",
+        type=str,
+        default=None,
+        help="Independent co-evaluation reviewer model (defaults to --model_review)",
+    )
+    parser.add_argument(
+        "--coeval-experiment-steps",
+        type=int,
+        default=3,
+        help="Maximum iterations per stage in each co-evaluation follow-up search",
+    )
+    parser.add_argument(
         "--skip_writeup",
         action="store_true",
         help="If set, skip the writeup process",
@@ -128,7 +154,12 @@ def parse_arguments():
         action="store_true",
         help="If set, skip the review process",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.co_evaluation and (args.skip_writeup or args.skip_review):
+        parser.error(
+            "--co-evaluation cannot be combined with --skip_writeup or --skip_review"
+        )
+    return args
 
 
 def get_available_gpus(gpu_ids=None):
@@ -139,6 +170,8 @@ def get_available_gpus(gpu_ids=None):
 
 def find_pdf_path_for_review(idea_dir):
     pdf_files = [f for f in os.listdir(idea_dir) if f.endswith(".pdf")]
+    if not pdf_files:
+        return None
     reflection_pdfs = [f for f in pdf_files if "reflection" in f]
     if reflection_pdfs:
         # First check if there's a final version
@@ -161,6 +194,8 @@ def find_pdf_path_for_review(idea_dir):
             else:
                 # Fall back to the first reflection PDF if no numbers found
                 pdf_path = osp.join(idea_dir, reflection_pdfs[0])
+    else:
+        pdf_path = max((osp.join(idea_dir, f) for f in pdf_files), key=osp.getmtime)
     return pdf_path
 
 
@@ -254,6 +289,12 @@ if __name__ == "__main__":
     )
 
     perform_experiments_bfts(idea_config_path)
+    coeval_idea_dir = None
+    if args.co_evaluation:
+        # Branch immediately after the shared tree search so both paths have the
+        # same topic and byte-identical initial experiment evidence.
+        coeval_idea_dir = create_coevaluation_branch(idea_dir)
+
     experiment_results_dir = osp.join(idea_dir, "logs/0-run/experiment_results")
     if os.path.exists(experiment_results_dir):
         shutil.copytree(
@@ -283,7 +324,6 @@ if __name__ == "__main__":
                     small_model=args.model_writeup_small,
                     big_model=args.model_writeup,
                     page_limit=8,
-                    citations_text=citations_text,
                 )
             else:
                 writeup_success = perform_icbinb_writeup(
@@ -304,7 +344,7 @@ if __name__ == "__main__":
     if not args.skip_review and not args.skip_writeup:
         # Perform paper review if the paper exists
         pdf_path = find_pdf_path_for_review(idea_dir)
-        if os.path.exists(pdf_path):
+        if pdf_path and os.path.exists(pdf_path):
             print("Paper found at: ", pdf_path)
             paper_content = load_paper(pdf_path)
             client, client_model = create_client(args.model_review)
@@ -317,6 +357,20 @@ if __name__ == "__main__":
             with open(osp.join(idea_dir, "review_img_cap_ref.json"), "w") as f:
                 json.dump(review_img_cap_ref, f, indent=4)
             print("Paper review completed.")
+
+    baseline_manifest = snapshot_baseline_artifacts(idea_dir)
+    if coeval_idea_dir is not None:
+        if not baseline_manifest.get("final_pdf"):
+            raise RuntimeError(
+                "The baseline branch did not produce a PDF; co-evaluation cannot "
+                "create a matched comparison."
+            )
+        coeval_manifest = run_coevaluation_pipeline(coeval_idea_dir, args)
+        comparison_path = write_comparison_manifest(
+            idea_dir, baseline_manifest, coeval_manifest
+        )
+        save_token_tracker(coeval_idea_dir)
+        print(f"Co-evaluation comparison saved to: {comparison_path}")
 
     print("Start cleaning up processes")
     # Kill all mp and torch processes associated with this experiment

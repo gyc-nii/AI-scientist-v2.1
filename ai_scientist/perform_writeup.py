@@ -505,6 +505,23 @@ def perform_writeup(
             else:
                 loaded_summaries[key] = {}
 
+        coevaluation_dir = osp.join(base_folder, "coevaluation")
+        if osp.isdir(coevaluation_dir):
+            for round_name in sorted(os.listdir(coevaluation_dir)):
+                bundle_path = osp.join(
+                    coevaluation_dir, round_name, "summary_bundle.json"
+                )
+                if not osp.isfile(bundle_path):
+                    continue
+                try:
+                    with open(bundle_path, "r") as f:
+                        bundle = json.load(f)
+                    loaded_summaries[f"COEVALUATION_{round_name.upper()}"] = bundle.get(
+                        "followup_summaries", {}
+                    )
+                except json.JSONDecodeError:
+                    print(f"Warning: {bundle_path} is not valid JSON. Skipping it.")
+
         # Convert them to one big JSON string for context
         combined_summaries_str = json.dumps(loaded_summaries, indent=2)
 
