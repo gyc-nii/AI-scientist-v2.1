@@ -58,7 +58,7 @@ def parse_arguments():
     parser.add_argument(
         "--load_ideas",
         type=str,
-        default="ideas/i_cant_believe_its_not_better.json",
+        default="ai_scientist/ideas/i_cant_believe_its_not_better.json",
         help="Path to a JSON file containing pregenerated ideas",
     )
     parser.add_argument(
