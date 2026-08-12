@@ -12,7 +12,6 @@ ANTHROPIC_TIMEOUT_EXCEPTIONS = (
     anthropic.APIConnectionError,
     anthropic.APITimeoutError,
     anthropic.InternalServerError,
-    anthropic.APIStatusError,
 )
 
 

@@ -998,7 +998,7 @@ class MinimalAgent:
             {
                 "type": "image_url",
                 "image_url": {
-                    "url": f"data:image/jpeg;base64,{encode_image_to_base64(plot_path)}"
+                    "url": f"data:{'image/png' if plot_path.lower().endswith('.png') else 'image/jpeg'};base64,{encode_image_to_base64(plot_path)}"
                 },
             }
             for plot_path in selected_plots
