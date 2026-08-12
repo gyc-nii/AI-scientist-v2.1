@@ -1,8 +1,9 @@
-import base64
 from typing import Any
+import base64
 import re
 import json
 import backoff
+import anthropic
 import openai
 import os
 from PIL import Image
@@ -16,20 +17,20 @@ AVAILABLE_VLMS = [
     "gpt-4o-2024-11-20",
     "gpt-4o-mini-2024-07-18",
     "o3-mini",
-
+    "claude-sonnet-4-6",
     # Ollama models
-
     # llama4
     "ollama/llama4:16x17b",
-
     # mistral
     "ollama/mistral-small3.2:24b",
-
     # qwen
     "ollama/qwen2.5vl:32b",
-
     "ollama/z-uo/qwen2.5vl_tools:32b",
 ]
+
+
+def _is_supported_vlm(model: str) -> bool:
+    return model in AVAILABLE_VLMS or model.startswith("claude-")
 
 
 def encode_image_to_base64(image_path: str) -> str:
@@ -144,7 +145,7 @@ def get_response_from_vlm(
     if msg_history is None:
         msg_history = []
 
-    if model in AVAILABLE_VLMS:
+    if _is_supported_vlm(model):
         # Convert single image path to list for consistent handling
         if isinstance(image_paths, str):
             image_paths = [image_paths]
@@ -155,27 +156,50 @@ def get_response_from_vlm(
         # Add each image to the content list
         for image_path in image_paths[:max_images]:
             base64_image = encode_image_to_base64(image_path)
-            content.append(
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/jpeg;base64,{base64_image}",
-                        "detail": "low",
-                    },
-                }
-            )
+            if model.startswith("claude-"):
+                content.append(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": base64_image,
+                        },
+                    }
+                )
+            else:
+                content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{base64_image}",
+                            "detail": "low",
+                        },
+                    }
+                )
         # Construct message with all images
         new_msg_history = msg_history + [{"role": "user", "content": content}]
 
-        response = make_vlm_call(
-            client,
-            model,
-            temperature,
-            system_message=system_message,
-            prompt=new_msg_history,
-        )
-
-        content = response.choices[0].message.content
+        if model.startswith("claude-"):
+            response = client.messages.create(
+                model=model,
+                max_tokens=MAX_NUM_TOKENS,
+                temperature=temperature,
+                system=system_message,
+                messages=new_msg_history,
+            )
+            content = "\n".join(
+                block.text for block in response.content if block.type == "text"
+            )
+        else:
+            response = make_vlm_call(
+                client,
+                model,
+                temperature,
+                system_message=system_message,
+                prompt=new_msg_history,
+            )
+            content = response.choices[0].message.content
         new_msg_history = new_msg_history + [{"role": "assistant", "content": content}]
     else:
         raise ValueError(f"Model {model} not supported.")
@@ -203,12 +227,18 @@ def create_client(model: str) -> tuple[Any, str]:
     ]:
         print(f"Using OpenAI API with model {model}.")
         return openai.OpenAI(), model
+    elif model.startswith("claude-"):
+        print(f"Using Anthropic API with model {model}.")
+        return anthropic.Anthropic(), model
     elif model.startswith("ollama/"):
         print(f"Using Ollama API with model {model}.")
-        return openai.OpenAI(
-            api_key=os.environ.get("OLLAMA_API_KEY", ""),
-            base_url="http://localhost:11434/v1"
-        ), model
+        return (
+            openai.OpenAI(
+                api_key=os.environ.get("OLLAMA_API_KEY", ""),
+                base_url="http://localhost:11434/v1",
+            ),
+            model,
+        )
     else:
         raise ValueError(f"Model {model} not supported.")
 

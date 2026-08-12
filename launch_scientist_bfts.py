@@ -6,6 +6,7 @@ import torch
 import os
 import re
 import sys
+import yaml
 from datetime import datetime
 from ai_scientist.llm import create_client
 
@@ -89,6 +90,12 @@ def parse_arguments():
         help="Attempt ID, used to distinguish same idea in different attempts in parallel runs",
     )
     parser.add_argument(
+        "--model_experiment",
+        type=str,
+        default=None,
+        help="Override all tree-search/report models in the per-run BFTS config",
+    )
+    parser.add_argument(
         "--model_agg_plots",
         type=str,
         default="o3-mini-2025-01-31",
@@ -166,6 +173,19 @@ def get_available_gpus(gpu_ids=None):
     if gpu_ids is not None:
         return [int(gpu_id) for gpu_id in gpu_ids.split(",")]
     return list(range(torch.cuda.device_count()))
+
+
+def configure_experiment_model(config_path, model):
+    if not model:
+        return
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+    config["report"]["model"] = model
+    for key in ("code", "feedback", "vlm_feedback", "summary", "select_node"):
+        if key in config["agent"]:
+            config["agent"][key]["model"] = model
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(config, f, sort_keys=False)
 
 
 def find_pdf_path_for_review(idea_dir):
@@ -287,6 +307,7 @@ if __name__ == "__main__":
         idea_dir,
         idea_path_json,
     )
+    configure_experiment_model(idea_config_path, args.model_experiment)
 
     perform_experiments_bfts(idea_config_path)
     coeval_idea_dir = None

@@ -1,5 +1,6 @@
 import time
 import os
+import re
 
 from .utils import FunctionSpec, OutputType, opt_messages_to_list, backoff_create
 from funcy import notnone, once, select_values
@@ -14,9 +15,37 @@ ANTHROPIC_TIMEOUT_EXCEPTIONS = (
     anthropic.APIStatusError,
 )
 
-def get_ai_client(model : str, max_retries=2) -> anthropic.AnthropicBedrock:
-    client = anthropic.AnthropicBedrock(max_retries=max_retries)
-    return client
+
+def get_ai_client(model: str, max_retries=2):
+    if model.startswith("anthropic."):
+        return anthropic.AnthropicBedrock(max_retries=max_retries)
+    return anthropic.Anthropic(max_retries=max_retries)
+
+
+def _convert_content(content):
+    if not isinstance(content, list):
+        return content
+    converted = []
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "image_url":
+            converted.append(block)
+            continue
+        url = block.get("image_url", {}).get("url", "")
+        match = re.fullmatch(r"data:([^;]+);base64,(.+)", url, re.DOTALL)
+        if not match:
+            raise ValueError("Anthropic image input must be a base64 data URL")
+        converted.append(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": match.group(1),
+                    "data": match.group(2),
+                },
+            }
+        )
+    return converted
+
 
 def query(
     system_message: str | None,
@@ -31,9 +60,14 @@ def query(
         filtered_kwargs["max_tokens"] = 8192  # default for Claude models
 
     if func_spec is not None:
-        raise NotImplementedError(
-            "Anthropic does not support function calling for now."
-        )
+        filtered_kwargs["tools"] = [
+            {
+                "name": func_spec.name,
+                "description": func_spec.description,
+                "input_schema": func_spec.json_schema,
+            }
+        ]
+        filtered_kwargs["tool_choice"] = {"type": "tool", "name": func_spec.name}
 
     # Anthropic doesn't allow not having a user messages
     # if we only have system msg -> use it as user msg
@@ -44,7 +78,7 @@ def query(
     if system_message is not None:
         filtered_kwargs["system"] = system_message
 
-    messages = opt_messages_to_list(None, user_message)
+    messages = opt_messages_to_list(None, _convert_content(user_message))
 
     t0 = time.time()
     message = backoff_create(
@@ -54,18 +88,17 @@ def query(
         **filtered_kwargs,
     )
     req_time = time.time() - t0
-    print(filtered_kwargs)
-
-    if "thinking" in filtered_kwargs:
-        assert (
-            len(message.content) == 2
-            and message.content[0].type == "thinking"
-            and message.content[1].type == "text"
-        )
-        output: str = message.content[1].text
+    if func_spec is not None:
+        tool_blocks = [block for block in message.content if block.type == "tool_use"]
+        if not tool_blocks:
+            raise ValueError(
+                "Anthropic response did not contain the requested tool call"
+            )
+        output = tool_blocks[0].input
     else:
-        assert len(message.content) == 1 and message.content[0].type == "text"
-        output: str = message.content[0].text
+        output = "\n".join(
+            block.text for block in message.content if block.type == "text"
+        )
 
     in_tokens = message.usage.input_tokens
     out_tokens = message.usage.output_tokens
