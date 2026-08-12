@@ -308,7 +308,12 @@ def _rewrite_result_paths(value, round_number):
 
 
 def _append_evidence(base_folder, heading, payload):
-    idea_md = osp.join(base_folder, "idea.md")
+    # Both writeup implementations prefer research_idea.md when it exists.
+    # Put reviewer feedback in that same source so it cannot be hidden by the
+    # fallback order in load_idea_text().
+    idea_md = osp.join(base_folder, "research_idea.md")
+    if not osp.exists(idea_md):
+        idea_md = osp.join(base_folder, "idea.md")
     with open(idea_md, "a", encoding="utf-8") as f:
         f.write(f"\n\n## {heading}\n\n")
         f.write(
@@ -521,11 +526,13 @@ def run_coevaluation_pipeline(base_folder, args):
     )
 
     aggregate_plots(base_folder=base_folder, model=args.model_agg_plots)
-    citations_text = gather_citations(
-        base_folder,
-        num_cite_rounds=args.num_cite_rounds,
-        small_model=args.model_citation,
-    )
+    citations_text = None
+    if args.writeup_type == "icbinb":
+        citations_text = gather_citations(
+            base_folder,
+            num_cite_rounds=args.num_cite_rounds,
+            small_model=args.model_citation,
+        )
     first_pdf = _write_paper(base_folder, args, citations_text)
     if not first_pdf:
         raise RuntimeError("Co-evaluation could not produce the pre-review PDF.")

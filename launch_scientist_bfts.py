@@ -311,11 +311,13 @@ if __name__ == "__main__":
 
     if not args.skip_writeup:
         writeup_success = False
-        citations_text = gather_citations(
-            idea_dir,
-            num_cite_rounds=args.num_cite_rounds,
-            small_model=args.model_citation,
-        )
+        citations_text = None
+        if args.writeup_type == "icbinb":
+            citations_text = gather_citations(
+                idea_dir,
+                num_cite_rounds=args.num_cite_rounds,
+                small_model=args.model_citation,
+            )
         for attempt in range(args.writeup_retries):
             print(f"Writeup attempt {attempt+1} of {args.writeup_retries}")
             if args.writeup_type == "normal":
