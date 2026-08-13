@@ -13,6 +13,7 @@ from ai_scientist.llm import (
     get_response_from_llm,
 )
 from ai_scientist.perform_icbinb_writeup import (
+    compile_latex,
     gather_citations,
     perform_writeup as perform_icbinb_writeup,
 )
@@ -450,6 +451,30 @@ def _write_paper(base_folder, args, citations_text=None):
     return None
 
 
+def _compile_existing_paper(base_folder):
+    latex_folder = osp.join(base_folder, "latex")
+    if not osp.isfile(osp.join(latex_folder, "template.tex")):
+        raise FileNotFoundError("Cannot resume compilation: latex/template.tex is missing.")
+    pdf_path = osp.join(
+        base_folder,
+        f"{osp.basename(base_folder)}_reflection_final_page_limit.pdf",
+    )
+    print(f"Compiling existing co-evaluation LaTeX: {latex_folder}")
+    if not compile_latex(latex_folder, pdf_path, timeout=120):
+        raise RuntimeError("Existing co-evaluation LaTeX did not compile cleanly.")
+    return pdf_path
+
+
+def _load_cached_citations(base_folder):
+    path = osp.join(base_folder, "cached_citations.bib")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            citations = f.read()
+    except FileNotFoundError:
+        return None
+    return citations or None
+
+
 def _score_pdf(base_folder, pdf_path, model):
     paper_content = load_paper(pdf_path)
     client, client_model = create_client(model)
@@ -514,26 +539,46 @@ def run_coevaluation_pipeline(base_folder, args):
         shutil.copytree(result_src, result_dst)
 
     reviewer_model = args.model_coeval or args.model_review
-    experiment_review = _review_experiments(base_folder, reviewer_model)
-    _append_evidence(
-        base_folder, "Independent Pre-Writeup Experiment Review", experiment_review
-    )
-    _run_followup_experiments(
-        base_folder,
-        experiment_review,
-        round_number=1,
-        experiment_steps=args.coeval_experiment_steps,
-    )
-
-    aggregate_plots(base_folder=base_folder, model=args.model_agg_plots)
-    citations_text = None
-    if args.writeup_type == "icbinb":
-        citations_text = gather_citations(
-            base_folder,
-            num_cite_rounds=args.num_cite_rounds,
-            small_model=args.model_citation,
+    resume_from_compile = getattr(args, "resume_from_compile", False)
+    if resume_from_compile:
+        review_path = osp.join(base_folder, "coevaluation", "pre_writeup_review.json")
+        experiment_review = _read_json(review_path)
+        if not isinstance(experiment_review, dict):
+            raise FileNotFoundError(
+                "Cannot resume co-evaluation compilation: pre-writeup review is missing."
+            )
+        round_one_summary = osp.join(
+            base_folder, "coevaluation", "round_1", "summary_bundle.json"
         )
-    first_pdf = _write_paper(base_folder, args, citations_text)
+        if experiment_review.get("required_experiments") and not osp.isfile(
+            round_one_summary
+        ):
+            raise RuntimeError(
+                "Cannot skip to compilation before required round-1 experiments finish."
+            )
+        citations_text = _load_cached_citations(base_folder)
+        first_pdf = _compile_existing_paper(base_folder)
+    else:
+        experiment_review = _review_experiments(base_folder, reviewer_model)
+        _append_evidence(
+            base_folder, "Independent Pre-Writeup Experiment Review", experiment_review
+        )
+        _run_followup_experiments(
+            base_folder,
+            experiment_review,
+            round_number=1,
+            experiment_steps=args.coeval_experiment_steps,
+        )
+
+        aggregate_plots(base_folder=base_folder, model=args.model_agg_plots)
+        citations_text = None
+        if args.writeup_type == "icbinb":
+            citations_text = gather_citations(
+                base_folder,
+                num_cite_rounds=args.num_cite_rounds,
+                small_model=args.model_citation,
+            )
+        first_pdf = _write_paper(base_folder, args, citations_text)
     if not first_pdf:
         raise RuntimeError("Co-evaluation could not produce the pre-review PDF.")
 

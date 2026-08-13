@@ -45,6 +45,11 @@ def remove_accents_and_clean(s):
 def compile_latex(cwd, pdf_file, timeout=30):
     print("GENERATING LATEX")
 
+    _fix_embedded_bibliography(cwd)
+    template_pdf = osp.join(cwd, "template.pdf")
+    if osp.exists(template_pdf):
+        os.remove(template_pdf)
+
     commands = _latex_commands()
 
     for command in commands:
@@ -72,14 +77,49 @@ def compile_latex(cwd, pdf_file, timeout=30):
 
     print("FINISHED GENERATING LATEX")
 
+    if _has_unresolved_citations(cwd):
+        print("LaTeX compilation left unresolved citations; refusing the PDF.")
+        return False
+
     try:
-        shutil.move(osp.join(cwd, "template.pdf"), pdf_file)
+        shutil.move(template_pdf, pdf_file)
         return True
     except FileNotFoundError:
         print("Failed to rename PDF.")
         print("EXCEPTION in compile_latex while moving PDF:")
         print(traceback.format_exc())
         return False
+
+
+def _fix_embedded_bibliography(cwd):
+    """Make an embedded references.bib block use the matching BibTeX database."""
+    template_path = osp.join(cwd, "template.tex")
+    try:
+        with open(template_path, "r", encoding="utf-8") as f:
+            latex = f.read()
+    except FileNotFoundError:
+        return
+
+    if (
+        r"\begin{filecontents}{references.bib}" in latex
+        and r"\bibliography{iclr2025}" in latex
+    ):
+        latex = latex.replace(r"\bibliography{iclr2025}", r"\bibliography{references}")
+        with open(template_path, "w", encoding="utf-8") as f:
+            f.write(latex)
+        print("Corrected embedded bibliography source to references.bib.")
+
+
+def _has_unresolved_citations(cwd):
+    log_path = osp.join(cwd, "template.log")
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            log = f.read().lower()
+    except FileNotFoundError:
+        return False
+    return ("citation" in log and "undefined" in log) or (
+        "empty `thebibliography'" in log
+    )
 
 
 def _latex_commands():

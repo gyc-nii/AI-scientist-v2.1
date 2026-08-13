@@ -16,6 +16,7 @@ from ai_scientist.perform_coevaluation import (
     write_comparison_manifest,
 )
 from ai_scientist.perform_icbinb_writeup import (
+    compile_latex,
     gather_citations,
     perform_writeup as perform_icbinb_writeup,
 )
@@ -45,6 +46,15 @@ def parse_arguments():
     parser.add_argument("--model_coeval", default=None)
     parser.add_argument("--coeval-experiment-steps", type=int, default=3)
     parser.add_argument("--co-evaluation", action="store_true")
+    parser.add_argument(
+        "--resume-from-compile",
+        action="store_true",
+        help=(
+            "Compile and review the existing LaTeX instead of repeating citation "
+            "gathering or paper generation. With --co-evaluation, completed pre-writeup "
+            "review work is reused before continuing the PDF review/revision loop."
+        ),
+    )
     args = parser.parse_args()
     # run_coevaluation_pipeline checks these launcher-compatible fields.
     args.skip_writeup = False
@@ -115,38 +125,53 @@ def _prepare_plots(base_folder, model):
 
 
 def _write_baseline(base_folder, args):
-    citations_text = None
-    if args.writeup_type == "icbinb":
-        citations_text = gather_citations(
+    if args.resume_from_compile:
+        latex_folder = osp.join(base_folder, "latex")
+        if not osp.isfile(osp.join(latex_folder, "template.tex")):
+            raise FileNotFoundError(
+                "Cannot resume compilation: latex/template.tex is missing."
+            )
+        pdf_path = osp.join(
             base_folder,
-            num_cite_rounds=args.num_cite_rounds,
-            small_model=args.model_citation,
+            f"{osp.basename(base_folder)}_reflection_final_page_limit.pdf",
         )
-
-    success = False
-    for attempt in range(args.writeup_retries):
-        print(f"Writeup attempt {attempt + 1} of {args.writeup_retries}")
-        if args.writeup_type == "normal":
-            success = perform_normal_writeup(
-                base_folder=base_folder,
-                small_model=args.model_writeup_small,
-                big_model=args.model_writeup,
-                page_limit=8,
+        print(f"Compiling existing baseline LaTeX: {latex_folder}")
+        if not compile_latex(latex_folder, pdf_path, timeout=120):
+            raise RuntimeError("Existing baseline LaTeX did not compile cleanly.")
+    else:
+        citations_text = None
+        if args.writeup_type == "icbinb":
+            citations_text = gather_citations(
+                base_folder,
+                num_cite_rounds=args.num_cite_rounds,
+                small_model=args.model_citation,
             )
-        else:
-            success = perform_icbinb_writeup(
-                base_folder=base_folder,
-                small_model=args.model_writeup_small,
-                big_model=args.model_writeup,
-                page_limit=4,
-                citations_text=citations_text,
-            )
-        if success:
-            break
-    if not success:
-        raise RuntimeError("Baseline writeup did not complete successfully.")
 
-    pdf_path = find_pdf_path_for_review(base_folder)
+        success = False
+        for attempt in range(args.writeup_retries):
+            print(f"Writeup attempt {attempt + 1} of {args.writeup_retries}")
+            if args.writeup_type == "normal":
+                success = perform_normal_writeup(
+                    base_folder=base_folder,
+                    small_model=args.model_writeup_small,
+                    big_model=args.model_writeup,
+                    page_limit=8,
+                )
+            else:
+                success = perform_icbinb_writeup(
+                    base_folder=base_folder,
+                    small_model=args.model_writeup_small,
+                    big_model=args.model_writeup,
+                    page_limit=4,
+                    citations_text=citations_text,
+                )
+            if success:
+                break
+        if not success:
+            raise RuntimeError("Baseline writeup did not complete successfully.")
+
+    if not args.resume_from_compile:
+        pdf_path = find_pdf_path_for_review(base_folder)
     if not pdf_path or not osp.isfile(pdf_path):
         raise RuntimeError("Baseline writeup reported success but produced no PDF.")
     paper_content = load_paper(pdf_path)
