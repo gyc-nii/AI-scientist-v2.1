@@ -9,6 +9,7 @@ import backoff
 import openai
 
 MAX_NUM_TOKENS = 4096
+CLAUDE_MAX_NUM_TOKENS = 8192
 
 AVAILABLE_LLMS = [
     "claude-3-5-sonnet-20240620",
@@ -315,7 +316,7 @@ def get_response_from_llm(
         ]
         response = client.messages.create(
             model=model,
-            max_tokens=MAX_NUM_TOKENS,
+            max_tokens=CLAUDE_MAX_NUM_TOKENS,
             temperature=temperature,
             system=system_message,
             messages=new_msg_history,
