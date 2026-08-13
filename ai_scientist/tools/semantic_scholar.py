@@ -16,6 +16,27 @@ def on_backoff(details: Dict) -> None:
     )
 
 
+SEMANTIC_SCHOLAR_RETRY_EXCEPTIONS = (
+    requests.exceptions.HTTPError,
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+)
+
+
+def give_up_semantic_scholar(exc: Exception) -> bool:
+    """Retry only rate limits and transient server errors."""
+    if not isinstance(exc, requests.exceptions.HTTPError):
+        return False
+    response = exc.response
+    return response is not None and response.status_code not in {
+        429,
+        500,
+        502,
+        503,
+        504,
+    }
+
+
 class SemanticScholarSearchTool(BaseTool):
     def __init__(
         self,
@@ -51,8 +72,11 @@ class SemanticScholarSearchTool(BaseTool):
 
     @backoff.on_exception(
         backoff.expo,
-        (requests.exceptions.HTTPError, requests.exceptions.ConnectionError),
+        SEMANTIC_SCHOLAR_RETRY_EXCEPTIONS,
         on_backoff=on_backoff,
+        giveup=give_up_semantic_scholar,
+        max_tries=5,
+        max_time=60,
     )
     def search_for_papers(self, query: str) -> Optional[List[Dict]]:
         if not query:
@@ -70,6 +94,7 @@ class SemanticScholarSearchTool(BaseTool):
                 "limit": self.max_results,
                 "fields": "title,authors,venue,year,abstract,citationCount",
             },
+            timeout=30,
         )
         print(f"Response Status Code: {rsp.status_code}")
         print(f"Response Content: {rsp.text[:500]}")
@@ -99,7 +124,12 @@ Abstract: {paper.get("abstract", "No abstract available.")}"""
 
 
 @backoff.on_exception(
-    backoff.expo, requests.exceptions.HTTPError, on_backoff=on_backoff
+    backoff.expo,
+    SEMANTIC_SCHOLAR_RETRY_EXCEPTIONS,
+    on_backoff=on_backoff,
+    giveup=give_up_semantic_scholar,
+    max_tries=5,
+    max_time=60,
 )
 def search_for_papers(query, result_limit=10) -> Union[None, List[Dict]]:
     S2_API_KEY = os.getenv("S2_API_KEY")
@@ -122,6 +152,7 @@ def search_for_papers(query, result_limit=10) -> Union[None, List[Dict]]:
             "limit": result_limit,
             "fields": "title,authors,venue,year,abstract,citationStyles,citationCount",
         },
+        timeout=30,
     )
     print(f"Response Status Code: {rsp.status_code}")
     print(
