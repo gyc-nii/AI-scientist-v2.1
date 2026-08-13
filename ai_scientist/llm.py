@@ -314,9 +314,12 @@ def get_response_from_llm(
                 ],
             }
         ]
+        claude_max_tokens = int(
+            os.environ.get("AI_SCIENTIST_CLAUDE_MAX_TOKENS", CLAUDE_MAX_NUM_TOKENS)
+        )
         response = client.messages.create(
             model=model,
-            max_tokens=CLAUDE_MAX_NUM_TOKENS,
+            max_tokens=claude_max_tokens,
             temperature=temperature,
             system=system_message,
             messages=new_msg_history,

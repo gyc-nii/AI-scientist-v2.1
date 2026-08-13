@@ -94,7 +94,9 @@ def _prepare_plots(base_folder, model):
         print(f"Regenerating missing figures with: {aggregator_path}")
         try:
             subprocess.run(
-                [sys.executable, aggregator_path], cwd=base_folder, check=True
+                [sys.executable, osp.abspath(aggregator_path)],
+                cwd=base_folder,
+                check=True,
             )
             if has_figures():
                 return
@@ -106,6 +108,8 @@ def _prepare_plots(base_folder, model):
     if osp.isdir(result_src):
         shutil.copytree(result_src, result_dst, dirs_exist_ok=True)
     aggregate_plots(base_folder=base_folder, model=model)
+    if not has_figures():
+        raise RuntimeError("Plot aggregation completed without producing figures.")
     if osp.isdir(result_dst):
         shutil.rmtree(result_dst)
 

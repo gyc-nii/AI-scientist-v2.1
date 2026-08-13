@@ -1,4 +1,5 @@
 import argparse
+import ast
 import json
 import os
 import re
@@ -16,7 +17,7 @@ from ai_scientist.perform_icbinb_writeup import (
     filter_experiment_summaries,
 )
 
-MAX_FIGURES = 12
+MAX_FIGURES = 6
 
 AGGREGATOR_SYSTEM_MSG = f"""You are an ambitious AI researcher who is preparing final plots for a scientific paper submission.
 You have multiple experiment summaries (baseline, research, ablation), each possibly containing references to different plots or numerical insights.
@@ -42,6 +43,7 @@ Implement best practices:
 - Aim to aggregate multiple figures into one plot if suitable, i.e. if they are all related to the same topic. You can place up to 3 plots in one row.
 - Provide well-labeled plots (axes, legends, titles) that highlight main findings. Use informative names everywhere, including in the legend for referencing them in the final paper. Make sure the legend is always visible.
 - Make the plots look professional (if applicable, no top and right spines, dpi of 300, adequate ylim, etc.).
+- Keep the complete script below 7,000 output tokens; prefer 3--5 essential figures over repetitive plots.
 - Do not use labels with underscores, e.g. "loss_vs_epoch" should be "loss vs epoch".
 - For image examples, select a few categories/classes to showcase the diversity of results instead of showing a single category/class. Some can be included in the main paper, while the rest can go in the appendix.
 
@@ -89,11 +91,22 @@ Respond with a Python script in triple backticks.
 def extract_code_snippet(text: str) -> str:
     """
     Look for a Python code block in triple backticks in the LLM response.
-    Return only that code. If no code block is found, return the entire text.
+    Return only complete, syntactically valid code. Never treat prose or a
+    truncated code fence as executable Python.
     """
-    pattern = r"```(?:python)?(.*?)```"
-    matches = re.findall(pattern, text, flags=re.DOTALL)
-    return matches[0].strip() if matches else text.strip()
+    pattern = r"(?<!`)```[ \t]*(?:python|py)?[ \t]*\r?\n?(.*?)(?<!`)```(?!`)"
+    matches = re.findall(pattern, text, flags=re.DOTALL | re.IGNORECASE)
+    candidates = [match.strip() for match in matches]
+    if not matches:
+        candidates.append(text.strip())
+
+    for candidate in candidates:
+        try:
+            ast.parse(candidate)
+        except SyntaxError:
+            continue
+        return candidate
+    return ""
 
 
 def run_aggregator_script(
