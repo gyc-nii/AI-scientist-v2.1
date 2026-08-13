@@ -45,12 +45,7 @@ def remove_accents_and_clean(s):
 def compile_latex(cwd, pdf_file, timeout=30):
     print("GENERATING LATEX")
 
-    commands = [
-        ["pdflatex", "-interaction=nonstopmode", "template.tex"],
-        ["bibtex", "template"],
-        ["pdflatex", "-interaction=nonstopmode", "template.tex"],
-        ["pdflatex", "-interaction=nonstopmode", "template.tex"],
-    ]
+    commands = _latex_commands()
 
     for command in commands:
         try:
@@ -69,7 +64,7 @@ def compile_latex(cwd, pdf_file, timeout=30):
                 f"EXCEPTION in compile_latex: LaTeX timed out after {timeout} seconds."
             )
             print(traceback.format_exc())
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, OSError):
             print(
                 f"EXCEPTION in compile_latex: Error running command {' '.join(command)}"
             )
@@ -79,10 +74,37 @@ def compile_latex(cwd, pdf_file, timeout=30):
 
     try:
         shutil.move(osp.join(cwd, "template.pdf"), pdf_file)
+        return True
     except FileNotFoundError:
         print("Failed to rename PDF.")
         print("EXCEPTION in compile_latex while moving PDF:")
         print(traceback.format_exc())
+        return False
+
+
+def _latex_commands():
+    """Return the configured LaTeX compilation command sequence.
+
+    Tectonic is an opt-in fallback for machines without a complete TeX Live
+    installation. It handles bibliography and reruns internally.
+    """
+    tectonic = os.environ.get("AI_SCIENTIST_TECTONIC", "").strip()
+    if tectonic:
+        return [
+            [
+                tectonic,
+                "-Z",
+                "continue-on-errors",
+                "--keep-logs",
+                "template.tex",
+            ]
+        ]
+    return [
+        ["pdflatex", "-interaction=nonstopmode", "template.tex"],
+        ["bibtex", "template"],
+        ["pdflatex", "-interaction=nonstopmode", "template.tex"],
+        ["pdflatex", "-interaction=nonstopmode", "template.tex"],
+    ]
 
 
 def is_header_or_footer(line):

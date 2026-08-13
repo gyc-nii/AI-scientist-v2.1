@@ -5,6 +5,8 @@ import json
 import os
 import os.path as osp
 import shutil
+import subprocess
+import sys
 
 from ai_scientist.llm import create_client
 from ai_scientist.perform_coevaluation import (
@@ -75,9 +77,29 @@ def _save_resume_tokens(base_folder):
 
 def _prepare_plots(base_folder, model):
     aggregator_path = osp.join(base_folder, "auto_plot_aggregator.py")
-    if osp.isfile(aggregator_path):
+    figures_dir = osp.join(base_folder, "figures")
+
+    def has_figures():
+        return osp.isdir(figures_dir) and any(
+            name.lower().endswith((".png", ".jpg", ".jpeg", ".pdf"))
+            and osp.isfile(osp.join(figures_dir, name))
+            for name in os.listdir(figures_dir)
+        )
+
+    if osp.isfile(aggregator_path) and has_figures():
         print(f"Reusing existing plot aggregation: {aggregator_path}")
         return
+
+    if osp.isfile(aggregator_path):
+        print(f"Regenerating missing figures with: {aggregator_path}")
+        try:
+            subprocess.run(
+                [sys.executable, aggregator_path], cwd=base_folder, check=True
+            )
+            if has_figures():
+                return
+        except subprocess.CalledProcessError as exc:
+            print(f"Existing plot aggregator failed ({exc}); regenerating it.")
 
     result_src = osp.join(base_folder, "logs", "0-run", "experiment_results")
     result_dst = osp.join(base_folder, "experiment_results")
