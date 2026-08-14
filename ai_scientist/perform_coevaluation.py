@@ -355,33 +355,49 @@ def _run_followup_experiments(base_folder, review, round_number, experiment_step
         )
 
     round_dir = osp.join(base_folder, "coevaluation", f"round_{round_number}")
+    bundle_path = osp.join(round_dir, "summary_bundle.json")
+    existing_bundle = _read_json(bundle_path)
+    if isinstance(existing_bundle, dict):
+        print(f"Reusing completed co-evaluation experiment round: {round_dir}")
+        return existing_bundle
+
     if osp.exists(round_dir):
-        raise FileExistsError(f"Co-evaluation round already exists: {round_dir}")
-    os.makedirs(round_dir)
+        config_path = osp.join(round_dir, "bfts_config.yaml")
+        manager_path = osp.join(round_dir, "logs", "0-run", "manager.pkl")
+        if not osp.isfile(config_path) or not osp.isfile(manager_path):
+            raise FileExistsError(
+                f"Incomplete co-evaluation round has no resumable manager: {round_dir}"
+            )
+        print(f"Resuming incomplete co-evaluation experiment round: {round_dir}")
+        perform_experiments_bfts(
+            config_path, resume_manager_path=manager_path
+        )
+    else:
+        os.makedirs(round_dir)
 
-    idea = _read_json(osp.join(base_folder, "idea.json"), {})
-    idea["Experiments"] = (
-        _as_text(idea.get("Experiments", ""))
-        + "\n\nIndependent co-evaluation required experiments:\n"
-        + _as_text(required)
-    )
-    idea["Risk Factors and Limitations"] = (
-        _as_text(idea.get("Risk Factors and Limitations", ""))
-        + "\n\nCo-evaluation claim risks to resolve:\n"
-        + _as_text(review.get("claim_risks", review.get("claim_corrections", [])))
-    )
-    idea["Code"] = seed_code
+        idea = _read_json(osp.join(base_folder, "idea.json"), {})
+        idea["Experiments"] = (
+            _as_text(idea.get("Experiments", ""))
+            + "\n\nIndependent co-evaluation required experiments:\n"
+            + _as_text(required)
+        )
+        idea["Risk Factors and Limitations"] = (
+            _as_text(idea.get("Risk Factors and Limitations", ""))
+            + "\n\nCo-evaluation claim risks to resolve:\n"
+            + _as_text(review.get("claim_risks", review.get("claim_corrections", [])))
+        )
+        idea["Code"] = seed_code
 
-    idea_json = osp.join(round_dir, "idea.json")
-    idea_md = osp.join(round_dir, "idea.md")
-    _write_json(idea_json, idea)
-    idea_to_markdown(idea, idea_md, None)
+        idea_json = osp.join(round_dir, "idea.json")
+        idea_md = osp.join(round_dir, "idea.md")
+        _write_json(idea_json, idea)
+        idea_to_markdown(idea, idea_md, None)
 
-    config_path = edit_bfts_config_file(
-        osp.join(base_folder, "bfts_config.yaml"), round_dir, idea_json
-    )
-    _configure_followup(config_path, experiment_steps)
-    perform_experiments_bfts(config_path)
+        config_path = edit_bfts_config_file(
+            osp.join(base_folder, "bfts_config.yaml"), round_dir, idea_json
+        )
+        _configure_followup(config_path, experiment_steps)
+        perform_experiments_bfts(config_path)
 
     run_dir = osp.join(round_dir, "logs", "0-run")
     summaries = {
@@ -395,7 +411,7 @@ def _run_followup_experiments(base_folder, review, round_number, experiment_step
         "review_request": review,
         "followup_summaries": summaries,
     }
-    _write_json(osp.join(round_dir, "summary_bundle.json"), bundle)
+    _write_json(bundle_path, bundle)
 
     result_src = osp.join(run_dir, "experiment_results")
     result_dst = osp.join(
@@ -404,7 +420,7 @@ def _run_followup_experiments(base_folder, review, round_number, experiment_step
         f"coevaluation_round_{round_number}",
     )
     if osp.isdir(result_src):
-        shutil.copytree(result_src, result_dst)
+        shutil.copytree(result_src, result_dst, dirs_exist_ok=True)
 
     _append_evidence(
         base_folder, f"Co-Evaluation Experiment Round {round_number}", bundle
@@ -540,6 +556,16 @@ def run_coevaluation_pipeline(base_folder, args):
 
     reviewer_model = args.model_coeval or args.model_review
     resume_from_compile = getattr(args, "resume_from_compile", False)
+    before_review_pdf = osp.join(base_folder, "coevaluation", "pdf_before_revision.pdf")
+    pdf_review_path = osp.join(
+        base_folder, "coevaluation", "pdf_revision_review.json"
+    )
+    saved_pdf_review = _read_json(pdf_review_path)
+    reuse_pdf_review = (
+        resume_from_compile
+        and osp.isfile(before_review_pdf)
+        and isinstance(saved_pdf_review, dict)
+    )
     if resume_from_compile:
         review_path = osp.join(base_folder, "coevaluation", "pre_writeup_review.json")
         experiment_review = _read_json(review_path)
@@ -557,7 +583,11 @@ def run_coevaluation_pipeline(base_folder, args):
                 "Cannot skip to compilation before required round-1 experiments finish."
             )
         citations_text = _load_cached_citations(base_folder)
-        first_pdf = _compile_existing_paper(base_folder)
+        if reuse_pdf_review:
+            first_pdf = before_review_pdf
+            print(f"Reusing completed independent PDF review: {pdf_review_path}")
+        else:
+            first_pdf = _compile_existing_paper(base_folder)
     else:
         experiment_review = _review_experiments(base_folder, reviewer_model)
         _append_evidence(
@@ -582,14 +612,13 @@ def run_coevaluation_pipeline(base_folder, args):
     if not first_pdf:
         raise RuntimeError("Co-evaluation could not produce the pre-review PDF.")
 
-    before_review_pdf = osp.join(base_folder, "coevaluation", "pdf_before_revision.pdf")
-    shutil.copy2(first_pdf, before_review_pdf)
-    pdf_review = _review_pdf(first_pdf, reviewer_model)
-    _write_json(
-        osp.join(base_folder, "coevaluation", "pdf_revision_review.json"),
-        pdf_review,
-    )
-    _append_evidence(base_folder, "Independent PDF Revision Review", pdf_review)
+    if reuse_pdf_review:
+        pdf_review = saved_pdf_review
+    else:
+        shutil.copy2(first_pdf, before_review_pdf)
+        pdf_review = _review_pdf(first_pdf, reviewer_model)
+        _write_json(pdf_review_path, pdf_review)
+        _append_evidence(base_folder, "Independent PDF Revision Review", pdf_review)
 
     if pdf_review.get("required_experiments"):
         _run_followup_experiments(

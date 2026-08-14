@@ -299,10 +299,19 @@ def annotate_history(journal, cfg=None):
 def overall_summarize(journals, cfg=None):
     from concurrent.futures import ThreadPoolExecutor
 
-    def process_stage(idx, stage_tuple):
+    journal_items = list(journals)
+
+    def main_stage_number(stage_name):
+        try:
+            return int(stage_name.split("_", 1)[0])
+        except (AttributeError, ValueError):
+            raise ValueError(f"Invalid experiment stage name: {stage_name!r}")
+
+    def process_stage(stage_tuple):
         stage_name, journal = stage_tuple
+        stage_number = main_stage_number(stage_name)
         annotate_history(journal, cfg=cfg)
-        if idx in [1, 2]:
+        if stage_number in [2, 3]:
             best_node = journal.get_best_node(cfg=cfg)
             # get multi-seed results and aggregater node
             child_nodes = best_node.children
@@ -332,12 +341,12 @@ def overall_summarize(journals, cfg=None):
                         agg_node
                     ),
                 }
-        elif idx == 3:
+        elif stage_number == 4:
             good_leaf_nodes = [
                 n for n in journal.good_nodes if n.is_leaf and n.ablation_name
             ]
             return [get_node_log(n) for n in good_leaf_nodes]
-        elif idx == 0:
+        elif stage_number == 1:
             if cfg.agent.get("summary", None) is not None:
                 model = cfg.agent.summary.get("model", "")
             else:
@@ -351,14 +360,28 @@ def overall_summarize(journals, cfg=None):
     with ThreadPoolExecutor() as executor:
         results = list(
             tqdm(
-                executor.map(process_stage, range(len(list(journals))), journals),
+                executor.map(process_stage, journal_items),
                 desc="Processing stages",
-                total=len(list(journals)),
+                total=len(journal_items),
             )
         )
-        draft_summary, baseline_summary, research_summary, ablation_summary = results
 
-    return draft_summary, baseline_summary, research_summary, ablation_summary
+    # A main stage may contain multiple substages. Keep the latest result for
+    # each main stage instead of assuming there are exactly four journal items.
+    results_by_stage = {}
+    for (stage_name, _), result in zip(journal_items, results):
+        results_by_stage[main_stage_number(stage_name)] = result
+
+    missing = [stage for stage in range(1, 5) if stage not in results_by_stage]
+    if missing:
+        completed = sorted(results_by_stage)
+        raise RuntimeError(
+            "Experiment stopped before report generation completed all main stages; "
+            f"completed={completed}, missing={missing}. Resume the saved manager "
+            "instead of treating the partial run as a finished experiment."
+        )
+
+    return tuple(results_by_stage[stage] for stage in range(1, 5))
 
 
 if __name__ == "__main__":

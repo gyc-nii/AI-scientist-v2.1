@@ -199,10 +199,33 @@ def main():
         else:
             coeval_folder = create_coevaluation_branch(base_folder)
 
-    _prepare_plots(base_folder, args.model_agg_plots)
-    _write_baseline(base_folder, args)
-    baseline_manifest = snapshot_baseline_artifacts(base_folder)
-    _save_resume_tokens(base_folder)
+    baseline_manifest = None
+    baseline_manifest_path = osp.join(base_folder, "branch_manifest.json")
+    coeval_pdf_review = (
+        osp.join(coeval_folder, "coevaluation", "pdf_revision_review.json")
+        if coeval_folder
+        else None
+    )
+    if (
+        args.resume_from_compile
+        and coeval_pdf_review
+        and osp.isfile(coeval_pdf_review)
+        and osp.isfile(baseline_manifest_path)
+    ):
+        with open(baseline_manifest_path, "r", encoding="utf-8") as f:
+            checkpoint_manifest = json.load(f)
+        if osp.isfile(checkpoint_manifest.get("final_pdf", "")):
+            baseline_manifest = checkpoint_manifest
+            print(
+                "Reusing completed baseline and PDF-review checkpoints; "
+                "continuing the co-evaluation experiment round."
+            )
+
+    if baseline_manifest is None:
+        _prepare_plots(base_folder, args.model_agg_plots)
+        _write_baseline(base_folder, args)
+        baseline_manifest = snapshot_baseline_artifacts(base_folder)
+        _save_resume_tokens(base_folder)
 
     if coeval_folder is not None:
         if not baseline_manifest.get("final_pdf"):

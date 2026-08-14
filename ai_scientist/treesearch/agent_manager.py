@@ -410,6 +410,19 @@ Your research idea:\n\n
     def _check_stage_completion(self, stage: Stage) -> bool:
         """Check if current stage is complete based on criteria"""
         journal = self.journals[stage.name]
+
+        # A short search can reach its iteration budget on the same step that
+        # produces its first working implementation. Treat that as success
+        # before applying the stage-1 failure-at-budget rule.
+        if stage.stage_number == 1 and len(journal.good_nodes) > 0:
+            logger.info(
+                f"Stage {stage.name} completed: found working implementation"
+            )
+            print(
+                f"[green]Stage {stage.name} completed: found working implementation[/green]"
+            )
+            return True, "Found working implementation"
+
         # Terminate if max iterations reached
         if len(journal.nodes) >= stage.max_iterations:
             logger.info(f"Stage {stage.name} completed: reached max iterations")
@@ -429,17 +442,6 @@ Your research idea:\n\n
                 return True, "Failed to find working implementation"
             else:
                 return True, "Reached max iterations"
-
-        # For initial stage, complete when we have at least one working implementation
-        if stage.stage_number == 1:
-            if len(journal.good_nodes) > 0:
-                logger.info(
-                    f"Stage {stage.name} completed: found working implementation"
-                )
-                print(
-                    f"[green]Stage {stage.name} completed: found working implementation[/green]"
-                )
-                return True, "Found working implementation"
 
         if stage.stage_number == 2:
             best_node = journal.get_best_node(cfg=self.cfg)

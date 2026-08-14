@@ -22,7 +22,7 @@ from rich.text import Text
 from rich.status import Status
 from rich.tree import Tree
 from .utils.config import load_task_desc, prep_agent_workspace, save_run, load_cfg
-from .agent_manager import AgentManager
+from .agent_manager import AgentManager, StageTransition
 from pathlib import Path
 from .agent_manager import Stage
 from .log_summarization import overall_summarize
@@ -55,32 +55,64 @@ def journal_to_rich_tree(journal: Journal, cfg):
     return tree
 
 
-def perform_experiments_bfts(config_path: str):
+def perform_experiments_bfts(config_path: str, resume_manager_path: str = None):
     # turn config path string into a path object
     config_path = Path(config_path)
-    cfg = load_cfg(config_path)
-    logger.info(f'Starting run "{cfg.exp_name}"')
+    if resume_manager_path:
+        manager_path = Path(resume_manager_path)
+        with open(manager_path, "rb") as f:
+            manager = pickle.load(f)
+        if not isinstance(manager, AgentManager):
+            raise TypeError(f"Saved manager is not an AgentManager: {manager_path}")
+        cfg = manager.cfg
+        task_desc = json.dumps(manager.task_desc, indent=2)
+        global_step = sum(len(journal.nodes) for journal in manager.journals.values())
+        if not (Path(cfg.workspace_dir) / "input").exists():
+            with Status("Restoring agent workspace ..."):
+                prep_agent_workspace(cfg)
 
-    task_desc = load_task_desc(cfg)
+        if manager.current_stage is None:
+            if not manager.stages:
+                raise RuntimeError("Saved manager has no completed stage to resume from.")
+            previous_stage = manager.stages[-1]
+            next_stage = manager._create_next_main_stage(
+                previous_stage, manager.journals[previous_stage.name]
+            )
+            if next_stage is not None:
+                manager.stage_history.append(
+                    StageTransition(
+                        from_stage=previous_stage.name,
+                        to_stage=next_stage.name,
+                        reason="Resuming after a completed main-stage checkpoint",
+                        config_adjustments={},
+                    )
+                )
+                manager.stages.append(next_stage)
+                manager.journals[next_stage.name] = Journal()
+                manager.current_stage = next_stage
+        print(f"Resuming experiment manager from: {manager_path}")
+    else:
+        cfg = load_cfg(config_path)
+        task_desc = load_task_desc(cfg)
+        global_step = 0
+        with Status("Preparing agent workspace (copying and extracting files) ..."):
+            prep_agent_workspace(cfg)
+        manager = AgentManager(
+            task_desc=task_desc,
+            cfg=cfg,
+            workspace_dir=Path(cfg.workspace_dir),
+        )
+
+    logger.info(f'Starting run "{cfg.exp_name}"')
     print(task_desc)
     task_desc_str = backend.compile_prompt_to_md(task_desc)
-
-    global_step = 0
-
-    with Status("Preparing agent workspace (copying and extracting files) ..."):
-        prep_agent_workspace(cfg)
 
     def cleanup():
         if global_step == 0:
             shutil.rmtree(cfg.workspace_dir)
 
-    atexit.register(cleanup)
-
-    manager = AgentManager(
-        task_desc=task_desc,
-        cfg=cfg,
-        workspace_dir=Path(cfg.workspace_dir),
-    )
+    if not resume_manager_path:
+        atexit.register(cleanup)
 
     prog = Progress(
         TextColumn("[progress.description]{task.description}"),
